@@ -63,8 +63,7 @@ def vis_chan(template, min_peak_to_peak=1):
 
 def conv_dist(ref, temp):
     """l2 distance of temp with all windows of ref."""
-    return np.sum(ref * ref) - 2 * np.convolve(ref, np.flip(temp, axis=0), mode='valid') + np.sum(temp * temp)
-
+    return np.convolve((ref * ref), np.ones(len(temp)), mode='valid') - 2 * np.convolve(ref, np.flip(temp, axis=0), mode='valid') + np.sum(temp * temp)
 
 def align_temp_to_temp(ref, temp):
     """Aligns temp with bigger window to ref with smaller window."""
