@@ -3,6 +3,20 @@ import scipy
 
 
 def conv_filter(data, temp, approx_rank=None, mode='full'):
+    """Convolves multichannel filter with multichannel data.
+
+    Parameters:
+    -----------
+    data: numpy array of shape (T, C)
+        Where T is number of time samples and C number of channels.
+    temp: numpy array of shape (t, C)
+        Where t is number of time samples and C is the number of
+        channels.
+    Returns:
+    --------
+    numpy.array
+    result of convolving the filter with the recording.
+    """
     n_chan = temp.shape[1]
     conv_res = 0.
     if approx_rank is None or approx_rank > n_chan:
@@ -18,9 +32,20 @@ def conv_filter(data, temp, approx_rank=None, mode='full'):
     return conv_res
 
 
-class match_pursuit(object):
+class MatchPursuit(object):
+    """Class for doing greedy matching pursuit deconvolution."""
 
     def __init__(self, data, temps, obj_energy=True):
+        """Sets up the deconvolution object.
+
+        Parameters:
+        -----------
+        data: numpy array of shape (T, C)
+            Where T is number of time samples and C number of channels.
+        temps: numpy array of shape (t, C, K)
+            Where t is number of time samples and C is the number of
+            channels and K is total number of units.
+        """
         self.n_time, self.n_chan, self.n_unit = temps.shape
         self.temps = temps
         self.data = data
