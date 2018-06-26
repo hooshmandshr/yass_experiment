@@ -166,6 +166,7 @@ def plot_spatial(geom, temp, ax, color='C0', scale=10., squeeze=8.):
             np.arange(0, leng, 1) / squeeze + geom[c, 0],
             temp[:, c] * scale + geom[c, 1], alpha=0.7, color=color, lw=2)
 
+
 def plot_spatial_fill(geom, temp, ax, color='C0', scale=10., squeeze=8.):
     """Plots standard error for each channel spatially."""
     temp_ = temp * 0
@@ -175,3 +176,26 @@ def plot_spatial_fill(geom, temp, ax, color='C0', scale=10., squeeze=8.):
             np.arange(0, leng, 1) / squeeze + geom[c, 0],
             temp_[:, c] - scale / 2  + geom[c, 1],
             temp_[:, c] + scale / 2 + geom[c, 1], color=color, alpha=0.3)
+
+
+def plot_chan_numbers(geom, ax, offset=10):
+    """Plots template spatially.77"""
+    for c in range(geom.shape[0]):
+        plt.text(geom[c, 0] + offset, geom[c, 1], str(c), size='large')
+
+
+
+def fake_data(spt, temps, length, noise=True):
+    """Given a spike train and templates creates a fake data."""
+    n_time, n_chan, n_unit = temps.shape
+    data = None
+    if noise:
+        data = np.random.normal(0, 1, [length, n_chan])
+    else:
+        data = np.zeros([length, n_chan])
+    for u in range(n_unit):
+        spt_u = spt[spt[:, 1] == u, 0]
+        spt_u = spt_u[spt_u < length - n_time]
+        idx = spt_u + np.arange(0, n_time)[:, np.newaxis]
+        data[idx, :] += temps[:, :, u][:, np.newaxis, :]
+    return data
