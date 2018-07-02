@@ -206,25 +206,30 @@ def count_matches(array1, array2, admissible_proximity=40):
 
     Returns
     -------
-    int
-        Number of temporal collisions of spikes in array1 vs spikes in
-        array2.
+    tuple of lists
+        (M, U) where M is the list of indices of array2 where
+        matched with array 1 happened and U contains a list of
+        indices of array2 where no match with array1 happened.
     """
     # In time samples
     
     m, n = len(array1), len(array2)
     i, j = 0, 0
     count = 0
+    matched_idx = []
+    unmatched_idx = []
     while i < m and j < n:
         if abs(array1[i] - array2[j]) < admissible_proximity:
+            matched_idx.append(j)
             i += 1
             j += 1
             count += 1
         elif array1[i] < array2[j]:
             i += 1
         else:
+            unmatched_idx.append(j)
             j += 1
-    return count
+    return matched_idx, unmatched_idx
 
 
 def compute_snr(temps):
