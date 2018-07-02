@@ -66,6 +66,10 @@ class MatchPursuit(object):
         self.obj_energy = obj_energy
         if obj_energy:
             self.update_v_squared()
+        # Indicator for computation of the objective.
+        self.obj_computed = False
+        # Resulting recovered spike train.
+        self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
 
     def update_v_squared(self):
         one_pad = np.ones([self.n_time, self.n_chan])
@@ -81,11 +85,21 @@ class MatchPursuit(object):
         return conv_res
 
     def compute_objective(self):
+        """Computes the objective given current state of recording."""
+        if self.obj_computed:
+            return
         for i in range(self.n_unit):
             self.dot[i, :] = self.approx_conv_filter(i, approx_rank=3)
         self.obj = 2 * self.dot - self.norm
         if self.obj_energy:
-            self.obj -= self.v_squared 
+            self.obj -= self.v_squared
+        # Enforce refrac period
+        radius = self.n_time // 2
+        window = np.arange(- radius, radius)
+        for i in range(self.n_unit):
+            unit_sp = self.dec_spike_train[self.dec_spike_train[:, 1] == i, 0]
+            refrac_idx = unit_sp[:, np.newaxis] + window
+            self.obj[i, refrac_idx] = - np.inf
         return self.obj
 
     def find_peaks(self):
@@ -102,7 +116,8 @@ class MatchPursuit(object):
             spike_times[:, np.newaxis] - self.n_time + 1,
             spike_ids[:, np.newaxis], axis=1)
 
-    def subtract_spike_train(self, spt):
+    def subtract_spike_train(self, spt, explicit=True):
+        """Substracts a spike train from the original spike_train."""
         for i in range(self.n_unit):
             unit_sp = spt[spt[:, 1] == i, :]
             self.data[np.arange(0, self.n_time) + unit_sp[:, :1], :] -= self.temps[:, :, i]
@@ -112,15 +127,14 @@ class MatchPursuit(object):
 
     def run(self, max_iter=3):
         ctr = 0
-        dec_spike_train = np.zeros([0, 2], dtype=np.int32)
         tot_max = np.inf
         while tot_max > self.threshold and ctr < max_iter:
-            print tot_max
             self.compute_objective()
             spt = self.find_peaks()
             self.subtract_spike_train(spt)
-            dec_spike_train = np.append(dec_spike_train, spt, axis=0)
+            self.dec_spike_train = np.append(self.dec_spike_train, spt, axis=0)
             tot_max = np.max(self.obj)
             ctr += 1
-            print "Iteration {} Found {} spikes.".format(ctr, spt.shape[0])
-        return dec_spike_train
+            print "Iteration {} Found {} spikes with Max Obj {}.".format(
+                ctr, spt.shape[0], tot_max)
+        return self.dec_spike_train

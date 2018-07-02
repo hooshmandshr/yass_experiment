@@ -199,3 +199,36 @@ def fake_data(spt, temps, length, noise=True):
         idx = spt_u + np.arange(0, n_time)[:, np.newaxis]
         data[idx, :] += temps[:, :, u][:, np.newaxis, :]
     return data
+
+
+def count_matches(array1, array2, admissible_proximity=40):
+    """Finds the matches between two count process.
+
+    Returns
+    -------
+    int
+        Number of temporal collisions of spikes in array1 vs spikes in
+        array2.
+    """
+    # In time samples
+    
+    m, n = len(array1), len(array2)
+    i, j = 0, 0
+    count = 0
+    while i < m and j < n:
+        if abs(array1[i] - array2[j]) < admissible_proximity:
+            i += 1
+            j += 1
+            count += 1
+        elif array1[i] < array2[j]:
+            i += 1
+        else:
+            j += 1
+    return count
+
+
+def compute_snr(temps):
+    chan_peaks = np.max(temps, axis=0)
+    chan_lows = np.min(temps, axis=0)
+    peak_to_peak = chan_peaks - chan_lows
+    return np.max(peak_to_peak, axis=0)
