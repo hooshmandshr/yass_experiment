@@ -158,13 +158,13 @@ def optimal_svd_align(template, geometry, rank=3, upsample=5, chunk=7, max_shift
     return np.array(aligned_temp).T
 
 
-def plot_spatial(geom, temp, ax, color='C0', scale=10., squeeze=8.):
+def plot_spatial(geom, temp, ax, color='C0', alpha=0.7, scale=10., squeeze=8.):
     """Plots template spatially."""
     leng = temp.shape[0]
     for c in range(temp.shape[1]):
         ax.plot(
             np.arange(0, leng, 1) / squeeze + geom[c, 0],
-            temp[:, c] * scale + geom[c, 1], alpha=0.7, color=color, lw=2)
+            temp[:, c] * scale + geom[c, 1], alpha=alpha, color=color, lw=2)
 
 
 def plot_spatial_fill(geom, temp, ax, color='C0', scale=10., squeeze=8.):
@@ -207,7 +207,7 @@ def count_matches(array1, array2, admissible_proximity=40):
     Returns
     -------
     tuple of lists
-        (M, U) where M is the list of indices of array2 where
+        (M, U, M) where M is the list of indices of array2 where
         matched with array 1 happened and U contains a list of
         indices of array2 where no match with array1 happened.
     """
@@ -233,7 +233,44 @@ def count_matches(array1, array2, admissible_proximity=40):
 
 
 def compute_snr(temps):
+    """Computes peak to peak SNR for given templates."""
+    
     chan_peaks = np.max(temps, axis=0)
     chan_lows = np.min(temps, axis=0)
     peak_to_peak = chan_peaks - chan_lows
     return np.max(peak_to_peak, axis=0)
+
+
+def enforce_refractory_period(spike_train, refractory_period):
+    """Removes spike times that violate refractory period.
+    
+    Parameters:
+    -----------
+    spike_train: numpy.ndarray
+        Shape (N, 2) where first column indicates spike times
+        and second column unit identities. Should be sorted
+        by times across all units.
+    refractory_period: int
+
+    Returns:
+    --------
+    np.ndarray of shape shape (N, 2).
+    """
+    n_unit = np.max(spike_train[:, 1])
+    delete_idx = []
+    for u in range(n_unit):
+        sp_idx = np.where(spike_train[:, 1] == u)[0]
+        
+        sp = spike_train[sp_idx, 0]
+        diffs = np.diff(sp)
+        idx = diffs < refractory_period
+        while np.sum(idx) > 0:
+            # Remove violating spike times
+            delete_idx += list(sp_idx[np.where(idx)[0] + 1])
+            sp_idx = np.delete(sp_idx, np.where(idx)[0] + 1, axis=0)
+            # Recompute
+            sp = spike_train[sp_idx, 0]
+            diffs = np.diff(sp)
+            idx = diffs < refractory_period
+    # Remove all the spike times from the original spike train
+    return np.delete(spike_train, delete_idx, axis=0)
