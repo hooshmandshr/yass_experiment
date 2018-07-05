@@ -70,6 +70,7 @@ class MatchPursuit(object):
         self.obj_computed = False
         # Resulting recovered spike train.
         self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
+        self.dist_metric = np.array([])
 
     def update_v_squared(self):
         one_pad = np.ones([self.n_time, self.n_chan])
@@ -107,14 +108,18 @@ class MatchPursuit(object):
         max_across_temp = np.max(self.obj, 0)
         spike_times = scipy.signal.argrelmax(max_across_temp, order=refrac_period)[0]
         spike_times = spike_times[max_across_temp[spike_times] > self.threshold]
+        dist_metric = max_across_temp[spike_times]
         # TODO(hooshmand): this requires a check of the last element(s)
         # of spike_times only not of all of them since spike_times
         # is sorted already.
-        spike_times = spike_times[spike_times < self.data_len - self.n_time]
+        valid_idx = spike_times < self.data_len - self.n_time
+        dist_metric = dist_metric[valid_idx]
+        spike_times = spike_times[valid_idx]
         spike_ids = np.argmax(self.obj[:, spike_times], axis=0)
-        return np.append(
+        result = np.append(
             spike_times[:, np.newaxis] - self.n_time + 1,
             spike_ids[:, np.newaxis], axis=1)
+        return result, dist_metric
 
     def subtract_spike_train(self, spt, explicit=True):
         """Substracts a spike train from the original spike_train."""
@@ -130,11 +135,12 @@ class MatchPursuit(object):
         tot_max = np.inf
         while tot_max > self.threshold and ctr < max_iter:
             self.compute_objective()
-            spt = self.find_peaks()
+            spt, dist_met = self.find_peaks()
             self.subtract_spike_train(spt)
             self.dec_spike_train = np.append(self.dec_spike_train, spt, axis=0)
+            self.dist_metric = np.append(self.dist_metric, dist_met)
             tot_max = np.max(self.obj)
             ctr += 1
             print "Iteration {} Found {} spikes with Max Obj {}.".format(
                 ctr, spt.shape[0], tot_max)
-        return self.dec_spike_train
+        return self.dec_spike_train, self.dist_metric
