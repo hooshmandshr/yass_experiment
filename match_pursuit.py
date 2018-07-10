@@ -35,7 +35,8 @@ def conv_filter(data, temp, approx_rank=None, mode='full'):
 class MatchPursuit(object):
     """Class for doing greedy matching pursuit deconvolution."""
 
-    def __init__(self, data, temps, threshold=10, conv_approx_rank=3, obj_energy=True):
+    def __init__(self, data, temps, threshold=10, conv_approx_rank=3,
+                 implicit_subtraction=True, obj_energy=True):
         """Sets up the deconvolution object.
 
         Parameters:
@@ -53,11 +54,15 @@ class MatchPursuit(object):
         self.data = data
         self.data_len = data.shape[0]
         self.threshold = threshold
+        self.approx_rank = conv_approx_rank
+        self.implicit_subtraction = implicit_subtraction
         # Computing SVD for each template.
         self.temporal, self.singular, self.spatial = np.linalg.svd(
             np.transpose(np.flipud(temps), (2, 0, 1)))
         self.obj_len = self.data_len + self.n_time - 1
         self.dot = np.zeros([self.n_unit, self.obj_len])
+        # Compute pairwise convolution of filters
+        self.pairwise_filter_conv()
         # compute norm of templates
         self.norm = np.zeros([self.n_unit, 1])
         for i in range(self.n_unit):
@@ -72,14 +77,26 @@ class MatchPursuit(object):
         self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
         self.dist_metric = np.array([])
 
+    def pairwise_filter_conv(self):
+        """Computes pairwise convolution of templates using SVD approximation."""
+        conv_res_len = self.n_time * 2 - 1
+        self.pairwise_conv = np.zeros([self.n_unit, self.n_unit, conv_res_len])
+        for unit1 in range(self.n_unit):
+            u, s, vh = self.temporal[unit1], self.singular[unit1], self.spatial[unit1]
+            for unit2 in range(self.n_unit):
+                for i in range(self.approx_rank):
+                    self.pairwise_conv[unit2, unit1, :] += np.convolve(
+                        np.matmul(self.temps[:, :, unit2], vh[i, :].T),
+                        s[i] * u[:, i].flatten(), 'full')
+
     def update_v_squared(self):
         one_pad = np.ones([self.n_time, self.n_chan])
         self.v_squared = conv_filter(np.square(self.data), one_pad, approx_rank=None)
 
-    def approx_conv_filter(self, unit, approx_rank=3):
+    def approx_conv_filter(self, unit):
         conv_res = 0.
         u, s, vh = self.temporal[unit], self.singular[unit], self.spatial[unit]
-        for i in range(approx_rank):
+        for i in range(self.approx_rank):
             conv_res += np.convolve(
                 np.matmul(self.data, vh[i, :].T),
                 s[i] * u[:, i].flatten(), 'full')
@@ -87,10 +104,10 @@ class MatchPursuit(object):
 
     def compute_objective(self):
         """Computes the objective given current state of recording."""
-        if self.obj_computed:
-            return
+        if self.obj_computed and self.implicit_subtraction:
+            return self.obj
         for i in range(self.n_unit):
-            self.dot[i, :] = self.approx_conv_filter(i, approx_rank=3)
+            self.dot[i, :] = self.approx_conv_filter(i)
         self.obj = 2 * self.dot - self.norm
         if self.obj_energy:
             self.obj -= self.v_squared
@@ -101,6 +118,10 @@ class MatchPursuit(object):
             unit_sp = self.dec_spike_train[self.dec_spike_train[:, 1] == i, 0]
             refrac_idx = unit_sp[:, np.newaxis] + window
             self.obj[i, refrac_idx] = - np.inf
+        # Set indicator to true so that it no longer is run
+        # for future iterations in case subtractions are done
+        # implicitly.
+        self.obj_computed = True
         return self.obj
 
     def find_peaks(self):
@@ -121,14 +142,21 @@ class MatchPursuit(object):
             spike_ids[:, np.newaxis], axis=1)
         return result, dist_metric
 
-    def subtract_spike_train(self, spt, explicit=True):
+    def subtract_spike_train(self, spt):
         """Substracts a spike train from the original spike_train."""
-        for i in range(self.n_unit):
-            unit_sp = spt[spt[:, 1] == i, :]
-            self.data[np.arange(0, self.n_time) + unit_sp[:, :1], :] -= self.temps[:, :, i]
-        # There is no need to update v_squared if it is not included in objective.
-        if self.obj_energy:
-            self.update_v_squared()
+        if not self.implicit_subtraction:
+            for i in range(self.n_unit):
+                unit_sp = spt[spt[:, 1] == i, :]
+                self.data[np.arange(0, self.n_time) + unit_sp[:, :1], :] -= self.temps[:, :, i]
+            # There is no need to update v_squared if it is not included in objective.
+            if self.obj_energy:
+                self.update_v_squared()
+        else:
+            for i in range(self.n_unit):
+                conv_res_len = self.n_time * 2 - 1
+                unit_sp = spt[spt[:, 1] == i, :]
+                spt_idx = np.arange(0, conv_res_len) + unit_sp[:, :1]
+                self.obj[:, spt_idx] -= 2 * self.pairwise_conv[i, :, :][:, None, :]
 
     def run(self, max_iter=3):
         ctr = 0
