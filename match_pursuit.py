@@ -56,6 +56,8 @@ class MatchPursuit(object):
         self.threshold = threshold
         self.approx_rank = conv_approx_rank
         self.implicit_subtraction = implicit_subtraction
+        self.vis_chan = None
+        self.visible_chans()
         # Computing SVD for each template.
         self.temporal, self.singular, self.spatial = np.linalg.svd(
             np.transpose(np.flipud(temps), (2, 0, 1)))
@@ -66,7 +68,7 @@ class MatchPursuit(object):
         # compute norm of templates
         self.norm = np.zeros([self.n_unit, 1])
         for i in range(self.n_unit):
-            self.norm[i] = np.sum(np.square(self.temps[:, :, i]))
+            self.norm[i] = np.sum(np.square(self.temps[:, self.vis_chan[:, i], i]))
         # Compute v_sqaured if it is included in the objective.
         self.obj_energy = obj_energy
         if obj_energy:
@@ -77,16 +79,23 @@ class MatchPursuit(object):
         self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
         self.dist_metric = np.array([])
 
+    def visible_chans(self):
+        if self.vis_chan is None:
+            a = np.max(self.temps, axis=0) - np.min(self.temps, 0)
+            self.vis_chan = a > 1
+        return self.vis_chan
+
     def pairwise_filter_conv(self):
         """Computes pairwise convolution of templates using SVD approximation."""
         conv_res_len = self.n_time * 2 - 1
         self.pairwise_conv = np.zeros([self.n_unit, self.n_unit, conv_res_len])
         for unit1 in range(self.n_unit):
             u, s, vh = self.temporal[unit1], self.singular[unit1], self.spatial[unit1]
+            vis_chan_idx = self.vis_chan[:, unit1]
             for unit2 in range(self.n_unit):
                 for i in range(self.approx_rank):
                     self.pairwise_conv[unit2, unit1, :] += np.convolve(
-                        np.matmul(self.temps[:, :, unit2], vh[i, :].T),
+                        np.matmul(self.temps[:, vis_chan_idx, unit2], vh[i, vis_chan_idx].T),
                         s[i] * u[:, i].flatten(), 'full')
 
     def update_v_squared(self):
@@ -97,8 +106,9 @@ class MatchPursuit(object):
         conv_res = 0.
         u, s, vh = self.temporal[unit], self.singular[unit], self.spatial[unit]
         for i in range(self.approx_rank):
+            vis_chan_idx = self.vis_chan[:, unit]
             conv_res += np.convolve(
-                np.matmul(self.data, vh[i, :].T),
+                np.matmul(self.data[:, vis_chan_idx], vh[i, vis_chan_idx].T),
                 s[i] * u[:, i].flatten(), 'full')
         return conv_res
 
