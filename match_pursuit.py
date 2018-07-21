@@ -79,6 +79,23 @@ class MatchPursuit(object):
         self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
         self.dist_metric = np.array([])
 
+    def update_data(self, data):
+        """Updates the data for the deconv to be run on with same templates."""
+        self.n_time, self.n_chan, self.n_unit = temps.shape
+        self.data = data
+        self.data_len = data.shape[0]
+        # Computing SVD for each template.
+        self.obj_len = self.data_len + self.n_time - 1
+        self.dot = np.zeros([self.n_unit, self.obj_len])
+        # Compute v_sqaured if it is included in the objective.
+        if obj_energy:
+            self.update_v_squared()
+        # Indicator for computation of the objective.
+        self.obj_computed = False
+        # Resulting recovered spike train.
+        self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
+        self.dist_metric = np.array([])
+
     def visible_chans(self):
         if self.vis_chan is None:
             a = np.max(self.temps, axis=0) - np.min(self.temps, 0)
