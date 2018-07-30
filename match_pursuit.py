@@ -36,7 +36,8 @@ class MatchPursuit(object):
     """Class for doing greedy matching pursuit deconvolution."""
 
     def __init__(self, data, temps, threshold=10, conv_approx_rank=3,
-                 implicit_subtraction=True, obj_energy=True):
+                 implicit_subtraction=True, obj_energy=False,
+                 vis_su=2., keep_iterations=False):
         """Sets up the deconvolution object.
 
         Parameters:
@@ -46,60 +47,66 @@ class MatchPursuit(object):
         temps: numpy array of shape (t, C, K)
             Where t is number of time samples and C is the number of
             channels and K is total number of units.
+        conv_approx_rank: int
+            Rank of SVD decomposition for approximating convolution
+            operations for templates.
+        threshold: float
+            amount of energy differential that is admissible by each
+            spike. The lower this threshold, more spikes are recovered.
         obj_energy: boolean
             Whether to include ||V||^2 term in the objective.
+        vis_su: float
+            threshold for visibility of template channel in terms
+            of peak to peak standard unit.
+        keep_iterations: boolean
+            Keeps the spike train per iteration if True. Otherwise,
+            does not keep the history.
         """
         self.n_time, self.n_chan, self.n_unit = temps.shape
         self.temps = temps
-        self.data = data
-        self.data_len = data.shape[0]
         self.threshold = threshold
         self.approx_rank = conv_approx_rank
         self.implicit_subtraction = implicit_subtraction
+        self.vis_su_threshold = vis_su
         self.vis_chan = None
         self.visible_chans()
         # Computing SVD for each template.
         self.temporal, self.singular, self.spatial = np.linalg.svd(
             np.transpose(np.flipud(temps), (2, 0, 1)))
-        self.obj_len = self.data_len + self.n_time - 1
-        self.dot = np.zeros([self.n_unit, self.obj_len])
         # Compute pairwise convolution of filters
         self.pairwise_filter_conv()
         # compute norm of templates
         self.norm = np.zeros([self.n_unit, 1])
         for i in range(self.n_unit):
             self.norm[i] = np.sum(np.square(self.temps[:, self.vis_chan[:, i], i]))
-        # Compute v_sqaured if it is included in the objective.
+        # Setting up data properties
+        self.keep_iterations = keep_iterations
         self.obj_energy = obj_energy
-        if obj_energy:
-            self.update_v_squared()
-        # Indicator for computation of the objective.
-        self.obj_computed = False
-        # Resulting recovered spike train.
+        self.update_data(data)
         self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
         self.dist_metric = np.array([])
 
     def update_data(self, data):
         """Updates the data for the deconv to be run on with same templates."""
-        self.n_time, self.n_chan, self.n_unit = temps.shape
         self.data = data
         self.data_len = data.shape[0]
         # Computing SVD for each template.
         self.obj_len = self.data_len + self.n_time - 1
         self.dot = np.zeros([self.n_unit, self.obj_len])
         # Compute v_sqaured if it is included in the objective.
-        if obj_energy:
+        if self.obj_energy:
             self.update_v_squared()
         # Indicator for computation of the objective.
         self.obj_computed = False
         # Resulting recovered spike train.
         self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
         self.dist_metric = np.array([])
+        self.iter_spike_train = []
 
     def visible_chans(self):
         if self.vis_chan is None:
             a = np.max(self.temps, axis=0) - np.min(self.temps, 0)
-            self.vis_chan = a > 1
+            self.vis_chan = a > self.vis_su_threshold
         return self.vis_chan
 
     def pairwise_filter_conv(self):
@@ -116,10 +123,18 @@ class MatchPursuit(object):
                         s[i] * u[:, i].flatten(), 'full')
 
     def update_v_squared(self):
+        """Updates the energy of consecutive windows of data."""
         one_pad = np.ones([self.n_time, self.n_chan])
         self.v_squared = conv_filter(np.square(self.data), one_pad, approx_rank=None)
 
     def approx_conv_filter(self, unit):
+        """Approximation of convolution of a template with the data.
+
+        Parameters:
+        -----------
+        unit: int
+            Id of the unit whose filter will be convolved with the data.
+        """
         conv_res = 0.
         u, s, vh = self.temporal[unit], self.singular[unit], self.spatial[unit]
         for i in range(self.approx_rank):
@@ -152,6 +167,7 @@ class MatchPursuit(object):
         return self.obj
 
     def find_peaks(self):
+        """Finds peaks in subtraction differentials of spikes."""
         refrac_period = self.n_time
         max_across_temp = np.max(self.obj, 0)
         spike_times = scipy.signal.argrelmax(max_across_temp, order=refrac_period)[0]
@@ -185,17 +201,24 @@ class MatchPursuit(object):
                 spt_idx = np.arange(0, conv_res_len) + unit_sp[:, :1]
                 self.obj[:, spt_idx] -= 2 * self.pairwise_conv[i, :, :][:, None, :]
 
-    def run(self, max_iter=3):
+    def get_iteration_spike_train(self):
+        return self.iter_spike_train
+
+    def run(self, max_iter):
         ctr = 0
         tot_max = np.inf
         while tot_max > self.threshold and ctr < max_iter:
             self.compute_objective()
             spt, dist_met = self.find_peaks()
             self.subtract_spike_train(spt)
+            if self.keep_iterations:
+                self.iter_spike_train.append(spt)
             self.dec_spike_train = np.append(self.dec_spike_train, spt, axis=0)
             self.dist_metric = np.append(self.dist_metric, dist_met)
             tot_max = np.max(self.obj)
             ctr += 1
             print "Iteration {} Found {} spikes with Max Obj {}.".format(
                 ctr, spt.shape[0], tot_max)
+            if len(spt) == 0:
+                break
         return self.dec_spike_train, self.dist_metric
