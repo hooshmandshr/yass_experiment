@@ -42,12 +42,14 @@ class MatchPursuitAnalyze(object):
         self.n_main_chan = n_channels
         self.n_feat = n_features
         #
-        self.residual = None
         self.features = None
         self.cid = None
         self.means = None
         self.snrs = snr_main_chans(temps)
         self.n_clusters = 0
+        #
+        self.residual = None
+        self.get_residual()
 
     def get_residual(self):
         """Returns the residual or computes it the first time."""
@@ -59,6 +61,12 @@ class MatchPursuitAnalyze(object):
 
         return self.residual
 
+    def get_unit_spikes(self, unit):
+        """Gets clean spikes for a given unit."""
+        unit_sp = self.spike_train[self.spike_train[:, 1] == unit, :]
+        # Add the spikes of the current unit back to the residual
+        return self.residual[np.arange(0, self.n_time) + unit_sp[:, :1], :] + self.temps[:, :, unit]
+
     def featurize_spikes(self, spikes, channels):
         """Given a set of spikes computes low dim representations of them."""
         features = np.zeros([spikes.shape[0], self.n_main_chan, self.n_feat])
@@ -69,13 +77,10 @@ class MatchPursuitAnalyze(object):
 
     def get_features(self):
         """Returns the features or computes it the first time."""
-        res = self.get_residual()
         if self.features is None:
             self.features = []
             for i in tqdm(range(self.n_unit), 'Computing Features'):
-                unit_sp = self.spike_train[self.spike_train[:, 1] == i, :]
-                # Add the spikes of the current unit back to the residual
-                unit_spikes = res[np.arange(0, self.n_time) + unit_sp[:, :1], :] + self.temps[:, :, i]
+                unit_spikes = self.get_unit_spikes(unit=i)
                 self.features.append(self.featurize_spikes(
                     unit_spikes, channels=self.snrs[-self.n_main_chan:, i]))
 
@@ -98,7 +103,7 @@ class MatchPursuitAnalyze(object):
     def split_units_means(self, n_clusters):
         """Splits recovered spikes per units into clusters."""
         if not(self.n_clusters == n_clusters) or self.means is None:
-            res = self.get_residual()
+            res = self.residual
             self.means = np.zeros([self.n_unit, self.n_clusters, self.n_time, self.n_chan])
             for i in tqdm(range(self.n_unit), 'Computing Wave Forms'):
                 unit_sp = self.spike_train[self.spike_train[:, 1] == i, :]
