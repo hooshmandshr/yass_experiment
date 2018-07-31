@@ -36,7 +36,7 @@ class MatchPursuit(object):
     """Class for doing greedy matching pursuit deconvolution."""
 
     def __init__(self, data, temps, threshold=10, conv_approx_rank=3,
-                 implicit_subtraction=True, obj_energy=False,
+                 implicit_subtraction=True, upsample=1, obj_energy=False,
                  vis_su=2., keep_iterations=False):
         """Sets up the deconvolution object.
 
@@ -64,6 +64,10 @@ class MatchPursuit(object):
         """
         self.n_time, self.n_chan, self.n_unit = temps.shape
         self.temps = temps
+        # Upsample and downsample time shifted versions
+        self.up_factor = upsample
+        if self.up_factor > 1:
+            self.upsample_templates()
         self.threshold = threshold
         self.approx_rank = conv_approx_rank
         self.implicit_subtraction = implicit_subtraction
@@ -72,7 +76,7 @@ class MatchPursuit(object):
         self.visible_chans()
         # Computing SVD for each template.
         self.temporal, self.singular, self.spatial = np.linalg.svd(
-            np.transpose(np.flipud(temps), (2, 0, 1)))
+            np.transpose(np.flipud(self.temps), (2, 0, 1)))
         # Compute pairwise convolution of filters
         self.pairwise_filter_conv()
         # compute norm of templates
@@ -85,6 +89,15 @@ class MatchPursuit(object):
         self.update_data(data)
         self.dec_spike_train = np.zeros([0, 2], dtype=np.int32)
         self.dist_metric = np.array([])
+
+    def upsample_templates(self):
+        """Computes downsampled shifted upsampled of templates."""
+        down_sample_idx = np.arange(0, self.n_time * self.up_factor, self.up_factor) + np.arange(0, self.up_factor)[:, None]
+        self.up_temps = scipy.signal.resample(self.temps, self.n_time * 3)[down_sample_idx, :, :]
+        self.up_temps = self.up_temps.transpose(
+            [2, 3, 0, 1]).reshape([self.n_chan, -1, self.n_time]).transpose([2, 0, 1])
+        self.temps = self.up_temps
+        self.n_unit = self.n_unit * self.up_factor
 
     def update_data(self, data):
         """Updates the data for the deconv to be run on with same templates."""
@@ -156,10 +169,7 @@ class MatchPursuit(object):
         # Enforce refrac period
         radius = self.n_time // 2
         window = np.arange(- radius, radius)
-        for i in range(self.n_unit):
-            unit_sp = self.dec_spike_train[self.dec_spike_train[:, 1] == i, 0]
-            refrac_idx = unit_sp[:, np.newaxis] + window
-            self.obj[i, refrac_idx] = - np.inf
+
         # Set indicator to true so that it no longer is run
         # for future iterations in case subtractions are done
         # implicitly.
@@ -185,6 +195,18 @@ class MatchPursuit(object):
             spike_ids[:, np.newaxis], axis=1)
         return result, dist_metric
 
+    def enforce_refractory(self, spike_train):
+        """Enforces refractory period for units."""
+        radius = self.n_time // 2
+        window = np.arange(- radius, radius)
+        for i in range(self.n_unit):
+            refrac_idx = []
+            for j in range(self.up_factor):
+                unit_sp = spike_train[spike_train[:, 1] == i * self.up_factor + j, 0]
+                refrac_idx.append(unit_sp[:, np.newaxis] + window)
+            for idx in refrac_idx:
+                self.obj[i:i + self.up_factor, idx] = - np.inf
+
     def subtract_spike_train(self, spt):
         """Substracts a spike train from the original spike_train."""
         if not self.implicit_subtraction:
@@ -194,12 +216,18 @@ class MatchPursuit(object):
             # There is no need to update v_squared if it is not included in objective.
             if self.obj_energy:
                 self.update_v_squared()
+            # recompute objective function
+            self.compute_objective()
+            # enforce refractory period for the current
+            # global spike train.
+            self.enforce_refractory(self.dec_spike_train)
         else:
             for i in range(self.n_unit):
                 conv_res_len = self.n_time * 2 - 1
                 unit_sp = spt[spt[:, 1] == i, :]
                 spt_idx = np.arange(0, conv_res_len) + unit_sp[:, :1]
                 self.obj[:, spt_idx] -= 2 * self.pairwise_conv[i, :, :][:, None, :]
+            self.enforce_refractory(spt)
 
     def get_iteration_spike_train(self):
         return self.iter_spike_train
@@ -207,8 +235,8 @@ class MatchPursuit(object):
     def run(self, max_iter):
         ctr = 0
         tot_max = np.inf
+        self.compute_objective()
         while tot_max > self.threshold and ctr < max_iter:
-            self.compute_objective()
             spt, dist_met = self.find_peaks()
             self.subtract_spike_train(spt)
             if self.keep_iterations:
