@@ -1,6 +1,5 @@
 import numpy as np
 import scipy
-import matplotlib.pyplot as plt
 
 
 def conv_filter(data, temp, approx_rank=None, mode='full'):
