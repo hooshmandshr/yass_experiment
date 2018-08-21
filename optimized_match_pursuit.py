@@ -68,10 +68,16 @@ class OptimizedMatchPursuit(object):
         self.up_window_len = len(self.up_window)
         off = (factor + 1) % 2
         peak_to_template_idx = np.append(
-                np.arange(radius - 1, -1, -1),
-                np.arange(factor-1, radius - 1, -1))
+                np.arange(radius + off, factor),
+                np.arange(radius + off))
         self.peak_to_template_idx = np.pad(
                 peak_to_template_idx,
+                (radius * (factor + 1) + off, radius * (factor - 1) - off),
+                'edge')
+        peak_time_jitter = np.array([1, 0]).repeat(radius)
+        peak_time_jitter[radius - 1] = 0
+        self.peak_time_jitter = np.pad(
+                peak_time_jitter,
                 (radius * (factor + 1) + off, radius * (factor - 1) - off),
                 'edge')
 
@@ -202,14 +208,23 @@ class OptimizedMatchPursuit(object):
         -----------
         times: numpy.array of numpy.int
             spike times for the unit.
+        unit_ids: numpy.array of numpy.int
+            Respective to times, id of each spike corresponding
+            to the original units.
+
+        Returns:
+        --------
+            tuple in the form of (numpy.array, numpy.array) respectively
+            the offset of shifted templates and a necessary time shift
+            to correct the spike time.
         """
         if self.up_factor == 1 or len(times) < 1:
-            return 0
+            return 0, 0
         idx = times + self.up_window
         new_peak_idx = np.argmax(scipy.signal.resample(
             self.obj[unit_ids, idx], self.up_window_len * self.up_factor, axis=0),
             axis=0)
-        return self.peak_to_template_idx[new_peak_idx]
+        return self.peak_to_template_idx[new_peak_idx], self.peak_time_jitter[new_peak_idx]
 
     def find_peaks(self):
         """Finds peaks in subtraction differentials of spikes."""
@@ -226,9 +241,10 @@ class OptimizedMatchPursuit(object):
         spike_times = spike_times[valid_idx]
         # Upsample the objective and find the best shift (upsampled)
         # template.
-        spike_ids = np.argmax(self.obj[:, spike_times], axis=0)
-        upsampled_template_idx = self.high_res_peak(spike_times, spike_ids)
+        spike_ids = np.argmax(self.obj[:, spike_times], axis=0) 
+        upsampled_template_idx, time_shift = self.high_res_peak(spike_times, spike_ids)
         spike_ids = spike_ids * self.up_factor + upsampled_template_idx
+        spike_times -= time_shift
         result = np.append(
             spike_times[:, None] - self.n_time + 1,
             spike_ids[:, None], axis=1)
