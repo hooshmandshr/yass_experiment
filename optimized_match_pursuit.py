@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import scipy
 
@@ -31,6 +32,7 @@ class OptimizedMatchPursuit(object):
         """
         self.n_time, self.n_chan, self.n_unit = temps.shape
         self.temps = temps.astype(np.float32)
+        self.orig_temps = temps.astype(np.float32)
         # Upsample and downsample time shifted versions
         self.up_factor = upsample
         self.threshold = threshold
@@ -156,7 +158,7 @@ class OptimizedMatchPursuit(object):
                         np.matmul(masked_temp, vh[i, vis_chan_idx].T),
                         s[i] * u[:, i].flatten(), 'full')
 
-    def get_upsampled_templates(self):
+    def get_reconstructed_upsampled_templates(self):
         """Get the reconstructed upsampled versions of the original templates.
 
         If no upsampling was requested, returns the SVD reconstructed version
@@ -166,6 +168,40 @@ class OptimizedMatchPursuit(object):
                 self.temporal_up * np.repeat(self.singular, self.up_factor, axis=0)[:, None, :],
                 np.repeat(self.spatial, self.up_factor, axis=0))
         return np.fliplr(rec).transpose([1, 2, 0])
+
+    def get_upsampled_templates(self):
+        """Returns the fully upsampled version of the original templates."""
+        down_sample_idx = np.arange(0, self.n_time * self.up_factor, self.up_factor)
+        down_sample_idx = down_sample_idx + np.arange(0, self.up_factor)[:, None]
+        up_temps = scipy.signal.resample(
+                self.orig_temps, self.n_time * self.up_factor)[down_sample_idx, :, :]
+        up_temps = up_temps.transpose(
+            [2, 3, 0, 1]).reshape([self.n_chan, -1, self.n_time]).transpose([2, 0, 1])
+        self.n_unit = self.n_unit * self.up_factor
+        # Reordering the upsampling. This is done because we upsampled the time
+        # reversed temporal components of the SVD reconstruction of the
+        # templates. This means That the time-reveresed 10x upsampled indices
+        # respectively correspond to [0, 9, 8, ..., 1] of the 10x upsampled of
+        # the original templates.
+        reorder_idx = np.tile(
+                np.append(
+                    np.arange(0, 1),
+                    np.arange(self.up_factor - 1, 0, -1)),
+                self.orig_n_unit)
+        reorder_idx += np.arange(
+                0, self.up_factor * self.orig_n_unit,
+                self.up_factor).repeat(self.up_factor)
+        return up_temps[:, :, reorder_idx]
+
+    def correct_shift_deconv_spike_train(self):
+        """Get time shift corrected version of the deconvovled spike train.
+
+        This corrected version only applies if you consider getting upsampled
+        templates with get_upsampled_templates() method.
+        """
+        correct_spt = copy.copy(self.dec_spike_train)
+        correct_spt[correct_spt[:, 1] % self.up_factor > 0, 0] += 1
+        return correct_spt
 
     def approx_conv_filter(self, unit):
         """Approximation of convolution of a template with the data.
