@@ -1,6 +1,7 @@
 import copy
 import numpy as np
 import scipy
+import matplotlib.pyplot as plt
 
 
 class OptimizedMatchPursuit(object):
@@ -55,7 +56,8 @@ class OptimizedMatchPursuit(object):
         # compute norm of templates
         self.norm = np.zeros([self.orig_n_unit, 1], dtype=np.float32)
         for i in range(self.orig_n_unit):
-            self.norm[i] = np.sum(np.square(self.temps[:, self.vis_chan[:, i], i]))
+            self.norm[i] = np.sum(
+                    np.square(self.temps[:, self.vis_chan[:, i], i]))
         # Setting up data properties
         self.keep_iterations = keep_iterations
         self.update_data(data)
@@ -69,19 +71,16 @@ class OptimizedMatchPursuit(object):
         self.up_window = np.arange(-radius - 1, radius + 1)[:, None]
         self.up_window_len = len(self.up_window)
         off = (factor + 1) % 2
+        # Indices of single time window the window around peak after upsampling
+        self.zoom_index = (radius + 1) * factor + np.arange(-factor // 2, radius)
         peak_to_template_idx = np.append(
                 np.arange(radius + off, factor),
                 np.arange(radius + off))
         self.peak_to_template_idx = np.pad(
-                peak_to_template_idx,
-                (radius * (factor + 1) + off, radius * (factor - 1) - off),
-                'edge')
+                peak_to_template_idx, (1, 0), 'edge')
         peak_time_jitter = np.array([1, 0]).repeat(radius)
         peak_time_jitter[radius - 1] = 0
-        self.peak_time_jitter = np.pad(
-                peak_time_jitter,
-                (radius * (factor + 1) + off, radius * (factor - 1) - off),
-                'edge')
+        self.peak_time_jitter = np.pad(peak_time_jitter, (1, 0), 'edge')
 
     def update_data(self, data):
         """Updates the data for the deconv to be run on with same templates."""
@@ -257,16 +256,20 @@ class OptimizedMatchPursuit(object):
         if self.up_factor == 1 or len(times) < 1:
             return 0, 0
         idx = times + self.up_window
-        new_peak_idx = np.argmax(scipy.signal.resample(
-            self.obj[unit_ids, idx], self.up_window_len * self.up_factor, axis=0),
-            axis=0)
-        return self.peak_to_template_idx[new_peak_idx], self.peak_time_jitter[new_peak_idx]
+        peak_window = self.obj[unit_ids, idx]
+        peak_window[peak_window == -np.inf] = 0.
+        high_resolution_peaks = scipy.signal.resample(
+                peak_window, self.up_window_len * self.up_factor, axis=0)
+        shift_idx = np.argmax(
+                high_resolution_peaks[self.zoom_index, :], axis=0)
+        return self.peak_to_template_idx[shift_idx], self.peak_time_jitter[shift_idx]
 
     def find_peaks(self):
         """Finds peaks in subtraction differentials of spikes."""
         refrac_period = self.n_time
         max_across_temp = np.max(self.obj, axis=0)
-        spike_times = scipy.signal.argrelmax(max_across_temp, order=refrac_period)[0]
+        spike_times = scipy.signal.argrelmax(
+                max_across_temp, order=refrac_period)[0]
         spike_times = spike_times[max_across_temp[spike_times] > self.threshold]
         dist_metric = max_across_temp[spike_times]
         # TODO(hooshmand): this requires a check of the last element(s)
@@ -277,8 +280,9 @@ class OptimizedMatchPursuit(object):
         spike_times = spike_times[valid_idx]
         # Upsample the objective and find the best shift (upsampled)
         # template.
-        spike_ids = np.argmax(self.obj[:, spike_times], axis=0) 
-        upsampled_template_idx, time_shift = self.high_res_peak(spike_times, spike_ids)
+        spike_ids = np.argmax(self.obj[:, spike_times], axis=0)
+        upsampled_template_idx, time_shift = self.high_res_peak(
+                spike_times, spike_ids)
         spike_ids = spike_ids * self.up_factor + upsampled_template_idx
         spike_times -= time_shift
         result = np.append(
@@ -291,12 +295,15 @@ class OptimizedMatchPursuit(object):
         radius = self.n_time // 2
         window = np.arange(- radius, radius)
         n_spikes = spike_train.shape[0]
+        win_len = len(window)
 
         time_idx = spike_train[:, 0:1] + window
         # Re-adjust cluster id's so that they match
         # with the original templates
         unit_idx = spike_train[:, 1:2] // self.up_factor
-        self.obj[unit_idx, time_idx] = - np.inf
+        self.obj[unit_idx, time_idx[:, 1:-1]] = - np.inf 
+        #self.obj[unit_idx, time_idx[:, [0, -1]]] = np.tile(np.max(
+        #    self.obj[unit_idx, time_idx[:, [0, -1]]], axis=1)[:, None], 2)
 
     def subtract_spike_train(self, spt):
         """Substracts a spike train from the original spike_train."""
