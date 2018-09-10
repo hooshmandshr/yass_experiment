@@ -216,7 +216,7 @@ class OptimizedMatchPursuit(object):
         """Computes the objective given current state of recording."""
         if self.obj_computed:
             return self.obj
-        n_rows = self.n_unit * self.approx_rank
+        n_rows = self.orig_n_unit * self.approx_rank
         matmul_result = np.matmul(
                 self.spatial.reshape([n_rows, -1]) * self.singular.reshape([-1, 1]),
                 self.data.T)
