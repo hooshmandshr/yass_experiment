@@ -212,30 +212,24 @@ class OptimizedMatchPursuit(object):
         correct_spt[correct_spt[:, 1] % self.up_factor > 0, 0] += 1
         return correct_spt
 
-    def approx_conv_filter(self, unit):
-        """Approximation of convolution of a template with the data.
-
-        Parameters:
-        -----------
-        unit: int
-            Id of the unit whose filter will be convolved with the data.
-        """
-        conv_res = 0.
-        u, s, vh = self.temporal[unit], self.singular[unit], self.spatial[unit]
-        for i in range(self.approx_rank):
-            vis_chan_idx = self.vis_chan[:, unit]
-            conv_res += np.convolve(
-                np.matmul(self.data[:, vis_chan_idx], vh[i, vis_chan_idx].T),
-                s[i] * u[:, i].flatten(), 'full')
-        return conv_res
-
     def compute_objective(self):
         """Computes the objective given current state of recording."""
         if self.obj_computed:
             return self.obj
-        for i in range(self.orig_n_unit):
-            self.dot[i, :] = self.approx_conv_filter(i)
-        self.obj = 2 * self.dot - self.norm
+        n_rows = self.n_unit * self.approx_rank
+        matmul_result = np.matmul(
+                self.spatial.reshape([n_rows, -1]) * self.singular.reshape([-1, 1]),
+                self.data.T)
+        conv_result = np.zeros(
+                [n_rows, self.data_len + self.n_time - 1], dtype=np.float32)
+        filters = self.temporal.transpose([0, 2, 1]).reshape([n_rows, -1])
+        for i in range(n_rows):
+            conv_result[i, :] = np.convolve(
+                    matmul_result[i, :], filters[i, :], mode='full')
+        for i in range(1, self.approx_rank):
+            conv_result[np.arange(0, n_rows, self.approx_rank), :] +=\
+                    conv_result[np.arange(i, n_rows, self.approx_rank), :]
+        self.obj = 2 * conv_result[np.arange(0, n_rows, self.approx_rank), :] - self.norm
         # Set indicator to true so that it no longer is run
         # for future iterations in case subtractions are done
         # implicitly.
