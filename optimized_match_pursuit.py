@@ -23,7 +23,10 @@ class OptimizedMatchPursuit(object):
             operations for templates.
         threshold: float
             amount of energy differential that is admissible by each
-            spike. The lower this threshold, more spikes are recovered. 
+            spike. The lower this threshold, more spikes are recovered.
+        upsample: int
+            Upsampling factor to be used for fitting templates. If 1, no
+            upsampling is done. If non-positive, dynamic upsampling will be used.
         vis_su: float
             threshold for visibility of template channel in terms
             of peak to peak standard unit.
@@ -34,8 +37,23 @@ class OptimizedMatchPursuit(object):
         self.n_time, self.n_chan, self.n_unit = temps.shape
         self.temps = temps.astype(np.float32)
         self.orig_temps = temps.astype(np.float32)
-        # Upsample and downsample time shifted versions
-        self.up_factor = upsample
+        # Dynamic Upsampling Setup.
+        if upsample < 1:
+            self.unit_up_factor = np.power(
+                    2, np.floor(np.log2(np.max(temps.ptp(axis=0), axis=0))))
+            self.up_factor = min(32, int(np.max(self.unit_up_factor)))
+            self.unit_up_factor[self.unit_up_factor > 32] = 32
+            self.up_up_map = np.zeros(
+                    self.n_unit * self.up_factor, dtype=np.int32)
+            for i in range(self.n_unit):
+                u_idx = i * self.up_factor
+                u_factor = self.unit_up_factor[i]
+                self.up_up_map[u_idx:u_idx + self.up_factor] = u_idx  + np.arange(
+                        0, self.up_factor, u_factor).repeat(u_factor)
+        else:
+            # Upsample and downsample time shifted versions
+            self.up_factor = upsample
+            self.up_up_map = range(self.n_unit * self.up_factor)
         self.threshold = threshold
         self.approx_rank = conv_approx_rank
         self.vis_su_threshold = vis_su
@@ -89,8 +107,6 @@ class OptimizedMatchPursuit(object):
         # window around peak for valid spikes.
         self.adjusted_refrac_radius = max(
                 1, self.refrac_radius - self.up_factor // 2)
-        # Stack for turning on invalud units for next iteration
-        self.turn_off_stack = []
 
     def update_data(self, data):
         """Updates the data for the deconv to be run on with same templates."""
@@ -147,25 +163,34 @@ class OptimizedMatchPursuit(object):
                 self.temporal, self.n_time * self.up_factor, axis=1)
         idx = np.arange(0, self.n_time * self.up_factor, self.up_factor) + np.arange(self.up_factor)[:, None]
         self.temporal_up = np.reshape(
-                self.temporal_up[:, idx, :], [-1, self.n_time, self.approx_rank])
+                self.temporal_up[:, idx, :], [-1, self.n_time, self.approx_rank]).astype(np.float32)
 
     def pairwise_filter_conv(self):
         """Computes pairwise convolution of templates using SVD approximation."""
         conv_res_len = self.n_time * 2 - 1
-        self.pairwise_conv = np.zeros(
-                [self.n_unit, self.orig_n_unit, conv_res_len], dtype=np.float32)
-        for unit1 in range(self.orig_n_unit):
-            u, s, vh = self.temporal[unit1], self.singular[unit1], self.spatial[unit1]
-            vis_chan_idx = self.vis_chan[:, unit1]
-            for unit2 in np.where(self.unit_overlap[:, unit1])[0]:
-                orig_unit = unit2 // self.up_factor
-                masked_temp = np.flipud(np.matmul(
-                        self.temporal_up[unit2] * self.singular[orig_unit],
-                        self.spatial[orig_unit, :, vis_chan_idx].T))
+        self.pairwise_conv = []
+        for i in range(self.n_unit):
+            self.pairwise_conv.append(None)
+        available_upsampled_units = np.unique(self.up_up_map)
+        for unit2 in available_upsampled_units:
+            # Set up the unit2 conv all overlaping original units.
+            n_overlap = np.sum(self.unit_overlap[unit2, :])
+            self.pairwise_conv[unit2] = np.zeros([n_overlap, conv_res_len], dtype=np.float32)
+            orig_unit = unit2 // self.up_factor
+            masked_temp = np.flipud(np.matmul(
+                    self.temporal_up[unit2] * self.singular[orig_unit][None, :],
+                    self.spatial[orig_unit, :, :]))
+            for j, unit1 in enumerate(np.where(self.unit_overlap[unit2, :])[0]):
+                u, s, vh = self.temporal[unit1], self.singular[unit1], self.spatial[unit1] 
+                vis_chan_idx = self.vis_chan[:, unit1]
+
+                mat_mul_res = np.matmul(
+                        masked_temp[:, vis_chan_idx], vh[:self.approx_rank, vis_chan_idx].T)
                 for i in range(self.approx_rank):
-                    self.pairwise_conv[unit2, unit1, :] += np.convolve(
-                        np.matmul(masked_temp, vh[i, vis_chan_idx].T),
-                        s[i] * u[:, i].flatten(), 'full')
+                    self.pairwise_conv[unit2][j, :] += np.convolve(
+                            mat_mul_res[:, i],
+                            s[i] * u[:, i].flatten(), 'full')
+        self.pairwise_conv = np.array(self.pairwise_conv)
 
     def get_reconstructed_upsampled_templates(self):
         """Get the reconstructed upsampled versions of the original templates.
@@ -332,7 +357,8 @@ class OptimizedMatchPursuit(object):
             # Grid idx of subset of channels and times
             unit_idx = self.unit_overlap[i]
             idx = np.ix_(unit_idx, spt_idx.ravel())
-            self.obj[idx] -= np.tile(2 * self.pairwise_conv[i, unit_idx, :], len(unit_sp))
+            self.obj[idx] -= np.tile(
+                    2 * self.pairwise_conv[self.up_up_map[i]], len(unit_sp))
 
         self.enforce_refractory(spt)
 
