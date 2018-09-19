@@ -48,8 +48,9 @@ class OptimizedMatchPursuit(object):
             for i in range(self.n_unit):
                 u_idx = i * self.up_factor
                 u_factor = self.unit_up_factor[i]
+                skip = self.up_factor // u_factor
                 self.up_up_map[u_idx:u_idx + self.up_factor] = u_idx  + np.arange(
-                        0, self.up_factor, u_factor).repeat(u_factor)
+                        0, self.up_factor, skip).repeat(skip)
         else:
             # Upsample and downsample time shifted versions
             self.up_factor = upsample
