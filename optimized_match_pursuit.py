@@ -204,6 +204,28 @@ class OptimizedMatchPursuit(object):
                 np.repeat(self.spatial, self.up_factor, axis=0))
         return np.fliplr(rec).transpose([1, 2, 0])
 
+    def get_sparse_upsampled_templates(self):
+        """Returns the fully upsampled version of the original templates."""
+        down_sample_idx = np.arange(0, self.n_time * self.up_factor, self.up_factor)
+        down_sample_idx = down_sample_idx + np.arange(0, self.up_factor)[:, None]
+        result = []
+        # Reordering the upsampling. This is done because we upsampled the time
+        # reversed temporal components of the SVD reconstruction of the
+        # templates. This means That the time-reveresed 10x upsampled indices
+        # respectively correspond to [0, 9, 8, ..., 1] of the 10x upsampled of
+        # the original templates.
+        all_temps = []
+        reorder_idx = np.append(
+                np.arange(0, 1),
+                np.arange(self.up_factor - 1, 0, -1))
+        for i in range(self.orig_n_unit):
+            up_temps = scipy.signal.resample(
+                    self.orig_temps[:, :, i], self.n_time * self.up_factor)[down_sample_idx, :]
+            up_temps = up_temps.transpose([1, 2, 0])
+            up_temps = up_temps[:, :, reorder_idx]
+            all_temps.append(up_temps)
+        return np.concatenate(all_temps, axis=2)
+            
     def get_upsampled_templates(self):
         """Returns the fully upsampled version of the original templates."""
         down_sample_idx = np.arange(0, self.n_time * self.up_factor, self.up_factor)
@@ -211,8 +233,7 @@ class OptimizedMatchPursuit(object):
         up_temps = scipy.signal.resample(
                 self.orig_temps, self.n_time * self.up_factor)[down_sample_idx, :, :]
         up_temps = up_temps.transpose(
-            [2, 3, 0, 1]).reshape([self.n_chan, -1, self.n_time]).transpose([2, 0, 1])
-        self.n_unit = self.n_unit * self.up_factor
+            [2, 3, 0, 1]).reshape([self.n_chan, -1, self.n_time]).transpose([2, 0, 1]) 
         # Reordering the upsampling. This is done because we upsampled the time
         # reversed temporal components of the SVD reconstruction of the
         # templates. This means That the time-reveresed 10x upsampled indices
