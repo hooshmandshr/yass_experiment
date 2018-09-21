@@ -205,9 +205,21 @@ class OptimizedMatchPursuit(object):
         return np.fliplr(rec).transpose([1, 2, 0])
 
     def get_sparse_upsampled_templates(self):
-        """Returns the fully upsampled version of the original templates."""
-        down_sample_idx = np.arange(0, self.n_time * self.up_factor, self.up_factor)
-        down_sample_idx = down_sample_idx + np.arange(0, self.up_factor)[:, None]
+        """Returns the fully upsampled sparse version of the original templates.
+
+        returns:
+        --------
+        Tuple of numpy.ndarray. First element is of shape (t, C, M) is the set
+        updampled shifted templates that have been used in the dynamic
+        upsampling approach. Second is an array of lenght K (number of original
+        units) * maximum upsample factor. Which maps cluster ids that are result
+        of deconvolution to 0,...,M-1 that corresponds to the sparse upsampled
+        templates.
+        """
+        down_sample_idx = np.arange(
+                0, self.n_time * self.up_factor, self.up_factor)
+        down_sample_idx = down_sample_idx + np.arange(
+                0, self.up_factor)[:, None]
         result = []
         # Reordering the upsampling. This is done because we upsampled the time
         # reversed temporal components of the SVD reconstruction of the
@@ -218,14 +230,27 @@ class OptimizedMatchPursuit(object):
         reorder_idx = np.append(
                 np.arange(0, 1),
                 np.arange(self.up_factor - 1, 0, -1))
+        # Sequentialize the number of up_up_map. For instance,
+        # [0, 0, 0, 0, 4, 4, 4, 4, ...] turns to [0, 0, 0, 0, 1, 1, 1, 1, ...].
+        deconv_id_sparse_temp_map = []
+        tot_temps_so_far = 0
         for i in range(self.orig_n_unit):
             up_temps = scipy.signal.resample(
-                    self.orig_temps[:, :, i], self.n_time * self.up_factor)[down_sample_idx, :]
+                    self.orig_temps[:, :, i],
+                    self.n_time * self.up_factor)[down_sample_idx, :]
             up_temps = up_temps.transpose([1, 2, 0])
             up_temps = up_temps[:, :, reorder_idx]
-            all_temps.append(up_temps)
-        return np.concatenate(all_temps, axis=2)
-            
+            skip = self.up_factor // self.unit_up_factor[i]
+            keep_upsample_idx = np.arange(0, self.up_factor, skip).astype(np.int32)
+            deconv_id_sparse_temp_map.append(np.arange(
+                    self.unit_up_factor[i]).repeat(skip) + tot_temps_so_far)
+            tot_temps_so_far += self.unit_up_factor[i]
+            all_temps.append(up_temps[:, :, keep_upsample_idx])
+
+        deconv_id_sparse_temp_map = np.concatenate(
+                deconv_id_sparse_temp_map, axis=0)
+        return np.concatenate(all_temps, axis=2), deconv_id_sparse_temp_map
+
     def get_upsampled_templates(self):
         """Returns the fully upsampled version of the original templates."""
         down_sample_idx = np.arange(0, self.n_time * self.up_factor, self.up_factor)
