@@ -370,8 +370,12 @@ class OptimizedMatchPursuit(object):
         spike_ids = np.argmax(self.obj[:, spike_times], axis=0)
         upsampled_template_idx, time_shift, valid_idx = self.high_res_peak(
                 spike_times, spike_ids)
-        spike_ids = spike_ids[valid_idx] * self.up_factor + upsampled_template_idx
-        spike_times = spike_times[valid_idx] - time_shift
+        # The spikes that had NAN in the window and could not be updampled
+        # should fall-back on default value.
+        spike_ids *= self.up_factor
+        if np.sum(valid_idx) > 0:
+            spike_ids[valid_idx] += upsampled_template_idx
+            spike_times[valid_idx] -= time_shift
         # Note that we shift the discovered spike times from convolution
         # Space to actual raw voltate space by subtracting self.n_time
         result = np.append(
@@ -394,6 +398,14 @@ class OptimizedMatchPursuit(object):
         unit_idx = spike_train[:, 1:2] // self.up_factor
         self.obj[unit_idx, time_idx[:, 1:-1]] = - np.inf
 
+    def enforce_regularization(self, spike_train):
+        """Adds sparsity regularization term to the objective function.
+
+        Assuming that rates
+        """
+        cosnt = 10
+        self.obj -= spike_train.shape[0] * const
+
     def subtract_spike_train(self, spt):
         """Substracts a spike train from the original spike_train."""
         present_units = np.unique(spt[:, 1])
@@ -408,6 +420,7 @@ class OptimizedMatchPursuit(object):
                     2 * self.pairwise_conv[self.up_up_map[i]], len(unit_sp))
 
         self.enforce_refractory(spt)
+        # self.enforce_regularization(spt)
 
     def get_iteration_spike_train(self):
         return self.iter_spike_train
